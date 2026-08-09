@@ -26,8 +26,18 @@ The hub handles all radio TX/RX and protocol framing. Device classes (covers tod
 ## Required hardware
 
 - **ESP32** (any variant)
-- **For RTS:** CC1101 433 MHz module + antenna (via ESPHome `remote_transmitter` / `remote_receiver`)
-- **For iohc:** CC1101 868 MHz module + antenna (via ESPHome native `cc1101` component in packet mode)
+- **For RTS:** any 433 MHz OOK TX/RX module + antenna, wired to a GPIO (via ESPHome's generic
+  `remote_transmitter` / `remote_receiver`). This is just a bit-banged GPIO signal, not tied to any
+  particular radio chip — a cheap FS1000A/RXB6-style module works fine, and so would an SX1262-based
+  board's spare GPIO if you wired an external OOK module to it (the onboard SX1262 radio itself can't be
+  used here — see below).
+- **For iohc:** either
+  - a CC1101 868 MHz module + antenna (via ESPHome's native `cc1101` component in packet mode), for
+    full support of both 1W and 2W (bidirectional) modes; or
+  - an SX1262 868 MHz radio (via ESPHome's native `sx126x` component), including boards with one
+    built in like the [Heltec WiFi LoRa 32 V3](https://devices.esphome.io/devices/heltec-wifi-lora-32-v3/)
+    — **1W only**. 2W's 3-channel frequency hopping needs a faster retune than `sx126x`'s driver exposes,
+    so 2W still requires a CC1101. `sx126x` also doesn't support OOK, so it can't be used for RTS.
 
 ## Installation
 
@@ -190,6 +200,40 @@ cover:
 - The component handles CRC-16 (Kermit) and AES-128 HMAC in software.
 - For bidirectional (2W) support, see the next section.
 
+### Using an onboard SX1262 instead (1W only)
+
+Boards with a built-in SX1262, like the Heltec WiFi LoRa 32 V3, can drive IOHC 1W directly via
+ESPHome's native `sx126x` component instead of a separate CC1101 module — see the full example in
+[`somfy_iohc_1w_sx1262.yaml`](somfy_iohc_1w_sx1262.yaml). Swap the `cc1101:` block above for:
+
+```yaml
+sx126x:
+  id: sx126x_radio
+  cs_pin: GPIO8
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  rst_pin: GPIO12
+  rf_switch: true
+  hw_version: sx1262
+  modulation: FSK
+  frequency: 868950000
+  bitrate: 38400
+  deviation: 19.2kHz
+  bandwidth: 93_8kHz
+  sync_value: [0x7F, 0xD9]
+  crc_enable: false
+  payload_length: 60
+  rx_start: false
+
+somfy:
+  - id: iohc_radio
+    type: iohc
+    sx126x_id: sx126x_radio  # instead of cc1101_id
+```
+
+Covers on an `sx126x_id`-backed hub must use `mode: 1w` (the default) — `mode: 2w` is rejected at
+compile time, since 2W's channel hopping isn't feasible with this radio (see Required hardware above).
+
 ### RX state-sync (sync with physical remotes)
 
 Just like RTS, the iohc hub can keep Home Assistant in sync when a motor is
@@ -299,7 +343,8 @@ cover:
 | `type` | yes | `rts` or `iohc` |
 | `remote_transmitter` | RTS only | ESPHome `remote_transmitter` ID |
 | `remote_receiver` | no | ESPHome `remote_receiver` ID (enables RX decode) |
-| `cc1101_id` | iohc only | ESPHome `cc1101` component ID |
+| `cc1101_id` | iohc, one of `cc1101_id`/`sx126x_id` | ESPHome `cc1101` component ID — supports 1W and 2W |
+| `sx126x_id` | iohc, one of `cc1101_id`/`sx126x_id` | ESPHome `sx126x` component ID — 1W only |
 
 ### Cover (`platform: somfy`)
 

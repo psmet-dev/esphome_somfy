@@ -12,6 +12,7 @@ from esphome.const import (
 
 from . import (
     CONF_REMOTE_RECEIVER,
+    CONF_SX126X_ID,
     DOMAIN,
     SomfyIohcHub,
     SomfyRtsHub,
@@ -87,6 +88,25 @@ def iohc_uses_rx(config):
     if config.get(CONF_IOHC_MODE, IOHC_MODE_1W) == IOHC_MODE_2W:
         return True
     return uses_rx(config)
+
+
+def validate_iohc_2w_radio(config, hub_config):
+    """2W frequency-hopping isn't supported on the sx126x radio backend.
+
+    sx126x's set_frequency() only takes effect on the next full configure(),
+    which is far too slow to call every channel-dwell window -- see
+    Sx126xIohcRadio in iohc_radio_sx126x.h. Reject the combination here so it
+    fails at config time instead of silently degrading at runtime.
+    """
+    if config.get(CONF_IOHC_MODE, IOHC_MODE_1W) != IOHC_MODE_2W:
+        return config
+    if hub_config is not None and CONF_SX126X_ID in hub_config:
+        raise cv.Invalid(
+            f"'{CONF_IOHC_MODE}: {IOHC_MODE_2W}' is not supported when the somfy "
+            f"hub uses '{CONF_SX126X_ID}' (2W channel hopping needs the cc1101 "
+            "backend); use mode: 1w instead"
+        )
+    return config
 
 
 def validate_rts_config(config, hub_config):
@@ -192,6 +212,9 @@ def _final_validate(config):
     if config[CONF_TYPE] == TYPE_RTS:
         hub_config = find_hub_config(fv.full_config.get(), config[CONF_SOMFY_ID])
         validate_rts_config(config, hub_config)
+    elif config[CONF_TYPE] == TYPE_IOHC:
+        hub_config = find_hub_config(fv.full_config.get(), config[CONF_SOMFY_ID])
+        validate_iohc_2w_radio(config, hub_config)
     return config
 
 

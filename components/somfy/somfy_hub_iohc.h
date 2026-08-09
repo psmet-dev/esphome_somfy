@@ -5,7 +5,7 @@
 #ifdef USE_SOMFY_IOHC
 
 #include "esphome/core/component.h"
-#include "esphome/components/cc1101/cc1101.h"
+#include "iohc_radio.h"
 #include <cstdint>
 #include <functional>
 #include <vector>
@@ -115,17 +115,17 @@ struct Session2W {
   Session2WCallback callback;
 };
 
-/// iohc radio hub — owns the CC1101, provides TX/RX and radio configuration.
+/// iohc radio hub — owns the radio backend, provides TX/RX and radio configuration.
 /// Devices register for RX callbacks and call transmit_packet() for TX.
 class SomfyIohcHub : public Component,
-                     public cc1101::CC1101Listener {
+                     public IohcRadioListener {
  public:
   void setup() override;
   void loop() override;
   void dump_config() override;
 
   // Configuration
-  void set_cc1101(cc1101::CC1101Component *cc1101) { this->cc1101_ = cc1101; }
+  void set_radio(IohcRadio *radio) { this->radio_ = radio; }
 
   // TX: transmit a raw packet (frame bytes including CRC) with repeats (1W mode)
   void transmit_packet(const std::vector<uint8_t> &frame, uint8_t repeat_count);
@@ -151,11 +151,11 @@ class SomfyIohcHub : public Component,
     this->rx_callbacks_.push_back(std::move(callback));
   }
 
-  // CC1101Listener interface
-  void on_packet(const std::vector<uint8_t> &packet, float freq_offset, float rssi, uint8_t lqi) override;
+  // IohcRadioListener interface
+  void on_iohc_packet(const std::vector<uint8_t> &packet, float rssi) override;
 
  protected:
-  cc1101::CC1101Component *cc1101_{nullptr};
+  IohcRadio *radio_{nullptr};
 
   // Reusable UART-codec buffers, so TX and RX do not allocate per packet.
   std::vector<uint8_t> tx_payload_;

@@ -48,11 +48,11 @@ void compute_2w_response(const uint8_t key[16], const uint8_t *frame_data, size_
 void SomfyIohcHub::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Somfy iohc hub...");
   this->configure_radio_1w();
-  this->cc1101_->register_listener(this);
+  this->radio_->setup(this);
   // Enter RX immediately so we can hear physical io-homecontrol remotes (and 2W
-  // feedback) from boot — the CC1101 does not auto-listen, and otherwise RX
+  // feedback) from boot — the radio does not auto-listen, and otherwise RX
   // would only start after the first HA-initiated TX.
-  this->cc1101_->begin_rx();
+  this->radio_->begin_rx();
 }
 
 void SomfyIohcHub::loop() {
@@ -62,7 +62,7 @@ void SomfyIohcHub::loop() {
     if ((now_us - this->last_hop_us_) >= iohc::CHANNEL_DWELL_US) {
       this->current_2w_channel_ = (this->current_2w_channel_ + 1) % 3;
       this->configure_radio_2w(this->current_2w_channel_);
-      this->cc1101_->begin_rx();  // re-enter RX after frequency change
+      this->radio_->begin_rx();  // re-enter RX after frequency change
       this->last_hop_us_ = now_us;
     }
   }
@@ -73,7 +73,7 @@ void SomfyIohcHub::loop() {
 
 void SomfyIohcHub::dump_config() {
   ESP_LOGCONFIG(TAG, "Somfy iohc Hub:");
-  ESP_LOGCONFIG(TAG, "  CC1101: %s", this->cc1101_ != nullptr ? "configured" : "MISSING");
+  ESP_LOGCONFIG(TAG, "  Radio: %s", this->radio_ != nullptr ? "configured" : "MISSING");
   ESP_LOGCONFIG(TAG, "  RX callbacks: %u", this->rx_callbacks_.size());
 }
 
@@ -85,12 +85,11 @@ void SomfyIohcHub::transmit_packet(const std::vector<uint8_t> &frame, uint8_t re
   this->configure_radio_1w();
 
   // Wrap the logical frame in the io-homecontrol UART-8N1 physical encoding and
-  // hand the CC1101 a fixed-length packet (no variable-length prefix byte goes
+  // hand the radio a fixed-length packet (no variable-length prefix byte goes
   // on air). The hardware sync word (0x7FD9) supplies the leading 16 sync bits;
   // the codec emits the remaining 4 sync bits + the UART-framed frame.
   auto &payload = this->tx_payload_;
   iohc_proto::uart_encode(frame.data(), frame.size(), payload);
-  this->cc1101_->set_packet_length(static_cast<uint8_t>(payload.size()));
 
   ESP_LOGD(TAG, "TX 1W: %u logical / %u on-air bytes, %d repeats", static_cast<unsigned>(frame.size()),
            static_cast<unsigned>(payload.size()), repeat_count);
@@ -98,20 +97,17 @@ void SomfyIohcHub::transmit_packet(const std::vector<uint8_t> &frame, uint8_t re
   ESP_LOGV(TAG, "TX 1W on-air: %s", format_hex_pretty(payload).c_str());
 
   for (int i = 0; i < repeat_count; i++) {
-    auto err = this->cc1101_->transmit_packet(payload);
-    if (err != cc1101::CC1101Error::NONE) {
-      ESP_LOGW(TAG, "TX error on repeat %d: %d", i, static_cast<int>(err));
+    if (!this->radio_->transmit(payload)) {
+      ESP_LOGW(TAG, "TX error on repeat %d", i);
       break;
     }
   }
 
-  // Restore the fixed-length RX capture window before resuming reception.
-  this->cc1101_->set_packet_length(iohc::RX_FIFO_WINDOW);
-  this->cc1101_->begin_rx();
+  this->radio_->begin_rx();
 }
 
 void SomfyIohcHub::begin_rx() {
-  this->cc1101_->begin_rx();
+  this->radio_->begin_rx();
 }
 
 // ---------------------------------------------------------------------------
@@ -119,32 +115,19 @@ void SomfyIohcHub::begin_rx() {
 // ---------------------------------------------------------------------------
 
 void SomfyIohcHub::configure_radio_1w() {
-  this->cc1101_->set_frequency(iohc::FREQUENCY_1W);
-  this->cc1101_->set_modulation_type(cc1101::Modulation::MODULATION_2_FSK);
-  this->cc1101_->set_symbol_rate(iohc::SYMBOL_RATE);
-  this->cc1101_->set_fsk_deviation(iohc::FSK_DEVIATION);
-  this->cc1101_->set_filter_bandwidth(iohc::FILTER_BW);
-  this->cc1101_->set_manchester(false);
-  // The io-homecontrol sync (logical 0xFF 0x33) is UART-encoded on air; program
-  // the hardware sync word to the first 16 encoded bits (0x7FD9). Hardware CRC
-  // is off — the CRC-16 lives inside the logical frame and we verify it after
-  // UART-decoding. Default to the fixed-length RX capture window.
-  this->cc1101_->set_sync1(iohc_proto::PHY_HW_SYNC1);
-  this->cc1101_->set_sync0(iohc_proto::PHY_HW_SYNC0);
-  this->cc1101_->set_crc_enable(false);
-  this->cc1101_->set_packet_length(iohc::RX_FIFO_WINDOW);
+  this->radio_->configure_1w();
   this->listening_2w_ = false;
 }
 
 void SomfyIohcHub::configure_radio_2w(uint8_t channel) {
   if (channel >= 3) channel = 0;
-  this->cc1101_->set_frequency(iohc::FREQUENCY_2W[channel]);
+  this->radio_->configure_2w(channel);
 }
 
 void SomfyIohcHub::start_2w_listen() {
   this->current_2w_channel_ = 0;
   this->configure_radio_2w(0);
-  this->cc1101_->begin_rx();
+  this->radio_->begin_rx();
   this->listening_2w_ = true;
   this->last_hop_us_ = micros();
 }
@@ -153,7 +136,7 @@ void SomfyIohcHub::stop_2w_listen() {
   this->listening_2w_ = false;
   this->configure_radio_1w();
   // Resume 1W RX so passive state-sync keeps working after the 2W session.
-  this->cc1101_->begin_rx();
+  this->radio_->begin_rx();
 }
 
 // ---------------------------------------------------------------------------
@@ -280,13 +263,10 @@ void SomfyIohcHub::send_2w_frame_(uint32_t src, uint32_t dest, uint8_t cmd,
   // Apply the same UART-8N1 physical encoding + fixed-length packet as 1W.
   auto &payload = this->tx_payload_;
   iohc_proto::uart_encode(frame.data(), frame.size(), payload);
-  this->cc1101_->set_packet_length(static_cast<uint8_t>(payload.size()));
-  auto err = this->cc1101_->transmit_packet(payload);
-  if (err != cc1101::CC1101Error::NONE) {
-    ESP_LOGW(TAG, "2W TX error: %d", static_cast<int>(err));
+  if (!this->radio_->transmit(payload)) {
+    ESP_LOGW(TAG, "2W TX error");
   }
-  this->cc1101_->set_packet_length(iohc::RX_FIFO_WINDOW);
-  this->cc1101_->begin_rx();
+  this->radio_->begin_rx();
   ESP_LOGD(TAG, "TX 2W: cmd=0x%02X %u logical / %u on-air bytes", cmd, static_cast<unsigned>(frame.size()),
            static_cast<unsigned>(payload.size()));
 }
@@ -295,9 +275,8 @@ void SomfyIohcHub::send_2w_frame_(uint32_t src, uint32_t dest, uint8_t cmd,
 // RX callback
 // ---------------------------------------------------------------------------
 
-void SomfyIohcHub::on_packet(const std::vector<uint8_t> &raw, float freq_offset,
-                              float rssi, uint8_t lqi) {
-  // The CC1101 captures a fixed-size window of raw on-air bytes after the
+void SomfyIohcHub::on_iohc_packet(const std::vector<uint8_t> &raw, float rssi) {
+  // The radio captures a fixed-size window of raw on-air bytes after the
   // hardware sync match (0x7FD9). Strip the io-homecontrol UART 8N1 framing to
   // recover the logical frame bytes (this is what the documented captures show).
   auto &packet = this->rx_frame_;
@@ -334,7 +313,6 @@ void SomfyIohcHub::on_packet(const std::vector<uint8_t> &raw, float freq_offset,
   pkt.data = (packet.size() > 11) ? &packet[9] : nullptr;
   pkt.data_len = (packet.size() > 11) ? packet.size() - 11 : 0;  // 9 header + 2 CRC
   pkt.rssi = rssi;
-  pkt.lqi = lqi;
 
   ESP_LOGD(TAG, "RX: src=0x%06" PRIX32 " dst=0x%06" PRIX32 " cmd=0x%02X rssi=%.1f len=%u", pkt.src_node,
            pkt.dest_node, pkt.cmd, rssi, static_cast<unsigned>(packet.size()));

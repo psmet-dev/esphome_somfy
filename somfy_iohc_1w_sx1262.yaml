@@ -1,0 +1,91 @@
+substitutions:
+  devicename: shades-iohc-sx1262
+  devicelabel: Shades iohc (SX1262)
+
+packages:
+  common: !include packages/common.yaml
+
+external_components:
+  source: github://leonardpitzu/esphome_somfy@main
+  components: [somfy]
+  refresh: 600s
+
+logger:
+  level: DEBUG
+
+esphome:
+  name: $devicename
+  comment: $devicelabel
+
+esp32:
+  variant: esp32s3
+
+web_server:
+  port: 80
+  log: false
+  local: true
+  version: 3
+
+# Onboard SX1262 pins for the Heltec WiFi LoRa 32 V3 -- see
+# https://devices.esphome.io/devices/heltec-wifi-lora-32-v3/
+spi:
+  clk_pin: GPIO9
+  mosi_pin: GPIO10
+  miso_pin: GPIO11
+
+# sx126x configured for io-homecontrol 1W (868 MHz, 2-GFSK). 1W only -- see
+# README.md for why 2W (bidirectional) channel hopping isn't supported on the
+# sx126x radio backend.
+sx126x:
+  id: sx126x_radio
+  cs_pin: GPIO8
+  busy_pin: GPIO13
+  dio1_pin: GPIO14
+  rst_pin: GPIO12
+  rf_switch: true
+  hw_version: sx1262
+  modulation: FSK
+  frequency: 868950000
+  bitrate: 38400
+  deviation: 19.2kHz
+  bandwidth: 93_8kHz
+  sync_value: [0x7F, 0xD9]
+  crc_enable: false
+  payload_length: 60
+  rx_start: false
+
+somfy:
+  - id: iohc_radio
+    type: iohc
+    sx126x_id: sx126x_radio
+
+button:
+  - platform: template
+    id: "program_bedroom_blind"
+    name: "Prog Bedroom Blind"
+    entity_category: config
+
+# Optional: shows the ID + command of any io-homecontrol remote heard on air,
+# so you can learn the IDs of the physical remotes paired with your motor.
+text_sensor:
+  - platform: template
+    id: somfy_iohc_rx_last
+    name: "Detected iohc Remote"
+
+cover:
+  - platform: somfy
+    type: iohc
+    id: bedroom_blind
+    name: "Bedroom Blind"
+    device_class: shutter
+    open_duration: 30s
+    close_duration: 30s
+    storage_key: KeyBedBlind
+    remote_code: 0xAABBCC
+    prog_button: program_bedroom_blind
+    somfy_id: iohc_radio
+    # RX state-sync: keep HA in sync when the motor is driven by an original remote.
+    detected_remote: somfy_iohc_rx_last
+    allowed_remotes:
+      - 0x112233
+    # encryption_key: "34C3466ED88F4E8E16AA473949884373"  # optional: custom key
