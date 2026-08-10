@@ -44,18 +44,46 @@ uint16_t NVSRollingCodeStorage::next_volatile_code_() {
   return ++this->last_code_;
 }
 
-uint16_t NVSRollingCodeStorage::nextCode() {
-  if (!this->opened_) {
-    if (!ensure_nvs_initialized_())
-      return this->next_volatile_code_();
+bool NVSRollingCodeStorage::open_() {
+  if (this->opened_)
+    return true;
 
-    esp_err_t err = nvs_open(this->name_, NVS_READWRITE, &this->handle_);
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "nvs_open('%s') failed: %s", this->name_, esp_err_to_name(err));
-      return this->next_volatile_code_();
-    }
-    this->opened_ = true;
+  if (!ensure_nvs_initialized_())
+    return false;
+
+  esp_err_t err = nvs_open(this->name_, NVS_READWRITE, &this->handle_);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "nvs_open('%s') failed: %s", this->name_, esp_err_to_name(err));
+    return false;
   }
+
+  this->opened_ = true;
+  return true;
+}
+
+bool NVSRollingCodeStorage::setCode(uint16_t code) {
+  // Keep the volatile fallback in step so a later NVS failure resumes from here
+  // rather than from a stale counter.
+  this->last_code_ = static_cast<uint16_t>(code - 1);
+
+  if (!this->open_())
+    return false;
+
+  esp_err_t err = nvs_set_u16(this->handle_, this->key_, code);
+  if (err == ESP_OK)
+    err = nvs_commit(this->handle_);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "setting rolling code '%s' to %u failed: %s", this->key_, code, esp_err_to_name(err));
+    return false;
+  }
+
+  ESP_LOGI(TAG, "rolling code '%s' forced to %u (0x%04X)", this->key_, code, code);
+  return true;
+}
+
+uint16_t NVSRollingCodeStorage::nextCode() {
+  if (!this->open_())
+    return this->next_volatile_code_();
 
   uint16_t code = 1;
   esp_err_t err = nvs_get_u16(this->handle_, this->key_, &code);

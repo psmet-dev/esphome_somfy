@@ -32,12 +32,18 @@ bool Sx126xIohcRadio::transmit(const std::vector<uint8_t> &payload) {
   // sx126x is configured with a fixed payload_length (iohc::RX_FIFO_WINDOW)
   // shared by TX and RX, so transmit_packet() requires an exact-size match.
   // Real io-homecontrol frames are always shorter than that window and carry
-  // no on-air length prefix; pad with zeros so the fixed-length framing lines
-  // up. Receivers determine the real frame end from the logical ctrl0 size
-  // field, the same way this project's own RX path does — verify on real
-  // hardware that a padded transmission is tolerated.
+  // no on-air length prefix, so the tail has to be filled with something.
+  //
+  // Pad with 0xFF, not 0x00. The physical layer is UART 8N1 (see
+  // iohc_proto::uart_encode) whose idle level is a continuous 1, which is what
+  // uart_encode itself uses to pad its final partial byte — and what real
+  // remotes put on air (their captured tails run 0xFF/0xAA/0x55). A run of
+  // 0x00 is 8 consecutive start-bit-shaped transitions per byte, which a
+  // receiver doing genuine UART framing can latch onto as a stream of framing
+  // errors right after the frame it was supposed to accept. Our own RX path
+  // stops at the ctrl0 length field and so never noticed the difference.
   std::vector<uint8_t> padded = payload;
-  padded.resize(iohc::RX_FIFO_WINDOW, 0);
+  padded.resize(iohc::RX_FIFO_WINDOW, 0xFF);
 
   auto err = this->sx126x_->transmit_packet(padded);
   if (err != sx126x::SX126xError::NONE) {

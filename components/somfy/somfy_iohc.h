@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #ifdef USE_SOMFY_IOHC_RX
@@ -47,8 +48,16 @@ static constexpr uint8_t CMD_REMOVE_CONTROLLER = 0x39;
 // it replies to anything at all on the frequency we're already listening on.
 static constexpr uint8_t CMD_ADDRESS_REQUEST = 0x36;
 
-// Main Parameters for CMD_EXECUTE
+// Main Parameters for CMD_EXECUTE.
+// OPEN and STOP are confirmed live: a physical remote's UP press decodes to
+// data 01 43 00 00 00 00 and its STOP press to 01 43 D2 00 00 00, both
+// MAC-verified against that remote's recovered key
+// (see frames_up_stop_remote.txt).
 static constexpr uint16_t MP_OPEN = 0x0000;
+// NOT verified against a capture. io-homecontrol encodes position as
+// 0x0000-0xC800 (0-100%) with 0xD1xx-0xD8xx reserved for special codes, so
+// 0xC800 is the more likely value for "close" -- capture a DOWN press from a
+// real remote before trusting this one.
 static constexpr uint16_t MP_CLOSE = 0xD400;
 static constexpr uint16_t MP_STOP = 0xD200;
 static constexpr uint16_t MP_MY = 0xD800;
@@ -112,6 +121,24 @@ class SomfyIohcCover : public SomfyTimeBasedCover {
   // replies with CMD_ADDRESS_ANSWER (0x37) -- see iohc_cmd::CMD_ADDRESS_REQUEST.
   // Not part of the normal cover API; call from a YAML lambda for testing.
   void send_address_request();
+
+  // Diagnostic: transmit a *verbatim* logical 1W frame given as a hex string
+  // (ctrl0..CRC inclusive, exactly as the hub's RX path decodes it). Nothing is
+  // recomputed -- no rolling code, no MAC, no CRC -- so a frame captured off a
+  // real remote can be replayed byte-for-byte.
+  //
+  // This is the one test that separates "our TX doesn't reach the motor" from
+  // "our TX reaches it but isn't authorised": a replayed frame is by definition
+  // one the actuator already accepted once. If the shutter moves, the whole
+  // radio/PHY chain is proven and the remaining gap is purely pairing.
+  // Call from a YAML lambda. Not part of the normal cover API.
+  void send_raw_frame(const std::string &hex);
+
+  // Diagnostic: force the persisted rolling code so the next transmitted frame
+  // uses `code`. An actuator only accepts codes ahead of the last one it saw,
+  // so adopting an existing controller identity requires jumping the counter
+  // past whatever that controller last sent. Call from a YAML lambda.
+  void set_rolling_code(uint16_t code);
 
 #ifdef USE_SOMFY_IOHC_RX
   // RX state-sync configuration (mirrors the RTS allowed_remotes/detected_remote

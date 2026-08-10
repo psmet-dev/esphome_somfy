@@ -136,7 +136,14 @@ class SomfyIohcHub : public Component,
   void set_radio(IohcRadio *radio) { this->radio_ = radio; }
 
   // TX: transmit a raw packet (frame bytes including CRC) with repeats (1W mode)
-  void transmit_packet(const std::vector<uint8_t> &frame, uint8_t repeat_count);
+  /// Transmit a logical 1W frame `repeat_count` times.
+  ///
+  /// With `mark_first_of_burst`, CtrlByte1 bit 0x20 is cleared (and the CRC
+  /// fixed up) from the second transmission onwards, matching what a real
+  /// remote does; the caller is expected to have set that bit. Pass false to
+  /// put the frame on air completely unmodified.
+  void transmit_packet(const std::vector<uint8_t> &frame, uint8_t repeat_count,
+                       bool mark_first_of_burst = true);
 
   // 2W TX: send a command with challenge/response authentication
   void send_2w_command(uint32_t src_node, uint32_t dest_node, uint8_t cmd,

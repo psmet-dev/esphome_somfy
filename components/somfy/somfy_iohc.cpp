@@ -3,12 +3,13 @@
 #ifdef USE_SOMFY_IOHC
 
 #include "iohc_protocol.h"
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include <cinttypes>
 #include <cstring>
 
 #ifdef USE_SOMFY_IOHC_RX
 #include "esphome/components/text_sensor/text_sensor.h"
-#include <cinttypes>
 #include <cstdio>
 #endif
 
@@ -194,6 +195,74 @@ void SomfyIohcCover::send_address_request() {
   this->hub_->transmit_packet(frame, static_cast<uint8_t>(this->repeat_count_));
 }
 
+void SomfyIohcCover::send_raw_frame(const std::string &hex) {
+  // Accept the shapes a capture is likely to be pasted in: bare hex, or with
+  // spaces / colons / dots between bytes.
+  std::vector<uint8_t> frame;
+  uint8_t nibble_pair = 0;
+  int nibbles = 0;
+  for (char c : hex) {
+    if (c == ' ' || c == ':' || c == '.' || c == '-' || c == '\n' || c == '\r' || c == '\t')
+      continue;
+    uint8_t v;
+    if (c >= '0' && c <= '9')
+      v = static_cast<uint8_t>(c - '0');
+    else if (c >= 'a' && c <= 'f')
+      v = static_cast<uint8_t>(c - 'a' + 10);
+    else if (c >= 'A' && c <= 'F')
+      v = static_cast<uint8_t>(c - 'A' + 10);
+    else {
+      ESP_LOGE(TAG, "RAW: invalid character '%c' in hex string", c);
+      return;
+    }
+    nibble_pair = static_cast<uint8_t>((nibble_pair << 4) | v);
+    if (++nibbles == 2) {
+      frame.push_back(nibble_pair);
+      nibble_pair = 0;
+      nibbles = 0;
+    }
+  }
+
+  if (nibbles != 0) {
+    ESP_LOGE(TAG, "RAW: hex string has an odd number of digits");
+    return;
+  }
+  if (frame.size() < 11) {
+    ESP_LOGE(TAG, "RAW: frame is only %u bytes, too short to be a 1W frame",
+             static_cast<unsigned>(frame.size()));
+    return;
+  }
+
+  // Report, but don't correct, a bad CRC or length field: replaying a frame
+  // exactly as captured is the entire point, and a mismatch here usually means
+  // the hex was truncated or copied from the on-air (UART-encoded) dump rather
+  // than the decoded logical frame.
+  const size_t expected = 1 + (frame[0] & 0x1F) + 2;
+  if (expected != frame.size()) {
+    ESP_LOGW(TAG, "RAW: ctrl0=0x%02X implies %u bytes but got %u -- sending anyway",
+             frame[0], static_cast<unsigned>(expected), static_cast<unsigned>(frame.size()));
+  }
+  if (crc16_kermit(frame.data(), frame.size()) != 0x0000) {
+    ESP_LOGW(TAG, "RAW: CRC does not validate (residue != 0) -- sending anyway");
+  }
+
+  ESP_LOGI(TAG, "RAW: replaying %u bytes verbatim, %d repeats: %s",
+           static_cast<unsigned>(frame.size()), this->repeat_count_,
+           format_hex(frame).c_str());
+  this->hub_->transmit_packet(frame, static_cast<uint8_t>(this->repeat_count_),
+                              /*mark_first_of_burst=*/false);
+}
+
+void SomfyIohcCover::set_rolling_code(uint16_t code) {
+  if (!this->storage_) {
+    ESP_LOGE(TAG, "rolling code storage is not ready yet");
+    return;
+  }
+  if (this->storage_->setCode(code))
+    ESP_LOGI(TAG, "next frame from node 0x%06" PRIX32 " will use rolling code %u (0x%04X)",
+             this->node_id_, code, code);
+}
+
 // ---------------------------------------------------------------------------
 // 1W Protocol (per-device: uses device key + rolling code)
 // ---------------------------------------------------------------------------
@@ -269,8 +338,11 @@ std::vector<uint8_t> SomfyIohcCover::build_1w_frame(uint8_t cmd, const uint8_t *
   // CtrlByte0 placeholder — the size field depends on the final body length and
   // is filled in once the body (ctrl1..MAC) is assembled.
   frame.push_back(0x00);
-  // CtrlByte1: 1W frames carry no Start/End framing bits (0x00).
-  frame.push_back(0x00);
+  // CtrlByte1: bit 0x20 marks the first transmission of a burst. A real remote
+  // sets it on the first copy and clears it on the repeats -- captured live on
+  // seq 0x04B3 and 0x04EE, each seen twice differing in exactly this byte.
+  // SomfyIohcHub::transmit_packet() clears it for the repeats.
+  frame.push_back(0x20);
 
   // Destination node ID (3 bytes, big-endian)
   frame.push_back(static_cast<uint8_t>((dest_node >> 16) & 0xFF));

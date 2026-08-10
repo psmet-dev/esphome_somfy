@@ -81,7 +81,8 @@ void SomfyIohcHub::dump_config() {
 // TX (1W)
 // ---------------------------------------------------------------------------
 
-void SomfyIohcHub::transmit_packet(const std::vector<uint8_t> &frame, uint8_t repeat_count) {
+void SomfyIohcHub::transmit_packet(const std::vector<uint8_t> &frame, uint8_t repeat_count,
+                                   bool mark_first_of_burst) {
   this->configure_radio_1w();
 
   // Wrap the logical frame in the io-homecontrol UART-8N1 physical encoding and
@@ -97,6 +98,20 @@ void SomfyIohcHub::transmit_packet(const std::vector<uint8_t> &frame, uint8_t re
   ESP_LOGV(TAG, "TX 1W on-air: %s", format_hex_pretty(payload).c_str());
 
   for (int i = 0; i < repeat_count; i++) {
+    if (i == 1 && mark_first_of_burst) {
+      // A real remote sets CtrlByte1 bit 0x20 on the first transmission of a
+      // burst and clears it on the repeats -- captured live on seq 0x04B3 and
+      // 0x04EE, which each appear twice differing in exactly this byte. The MAC
+      // doesn't cover ctrl1 (it authenticates cmd || data only), so only the
+      // CRC has to be recomputed. Re-encode once here and reuse it for the
+      // remaining repeats.
+      auto repeat_frame = frame;
+      repeat_frame[1] = static_cast<uint8_t>(repeat_frame[1] & ~0x20);
+      const uint16_t crc = crc16_kermit(repeat_frame.data(), repeat_frame.size() - 2);
+      repeat_frame[repeat_frame.size() - 2] = static_cast<uint8_t>(crc & 0xFF);
+      repeat_frame[repeat_frame.size() - 1] = static_cast<uint8_t>((crc >> 8) & 0xFF);
+      iohc_proto::uart_encode(repeat_frame.data(), repeat_frame.size(), payload);
+    }
     if (!this->radio_->transmit(payload)) {
       ESP_LOGW(TAG, "TX error on repeat %d", i);
       break;
@@ -314,8 +329,13 @@ void SomfyIohcHub::on_iohc_packet(const std::vector<uint8_t> &raw, float rssi) {
   pkt.data_len = (packet.size() > 11) ? packet.size() - 11 : 0;  // 9 header + 2 CRC
   pkt.rssi = rssi;
 
-  ESP_LOGD(TAG, "RX: src=0x%06" PRIX32 " dst=0x%06" PRIX32 " cmd=0x%02X rssi=%.1f len=%u", pkt.src_node,
-           pkt.dest_node, pkt.cmd, rssi, static_cast<unsigned>(packet.size()));
+  // Log the decoded logical frame, not just the header. The raw `Data:` dump an
+  // sx126x on_packet lambda prints is the UART-encoded 60-byte window and has to
+  // be run back through uart_decode before it means anything; this line is the
+  // frame itself (ctrl0..CRC) and can be fed straight back to send_raw_frame().
+  ESP_LOGD(TAG, "RX: src=0x%06" PRIX32 " dst=0x%06" PRIX32 " cmd=0x%02X rssi=%.1f len=%u frame=%s",
+           pkt.src_node, pkt.dest_node, pkt.cmd, rssi, static_cast<unsigned>(packet.size()),
+           format_hex(packet).c_str());
 
   // Handle 2W session packets
   this->handle_2w_packet_(pkt);

@@ -20,9 +20,16 @@ private:
   uint16_t last_code_{0};
 
   static bool ensure_nvs_initialized_();
+  bool open_();
   uint16_t next_volatile_code_();
 
 public:
   NVSRollingCodeStorage(const char *name, const char *key);
   uint16_t nextCode() override;
+
+  /// Force the stored counter so the *next* nextCode() returns `code`.
+  /// Needed when adopting an existing controller identity, where the actuator
+  /// already expects a rolling code beyond whatever this device has stored.
+  /// Returns false if the value could not be persisted.
+  bool setCode(uint16_t code);
 };
