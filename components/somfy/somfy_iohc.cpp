@@ -168,16 +168,17 @@ void SomfyIohcCover::program() {
   // Step 2: CMD_WRITE_PRIVATE (0x30) pushes the controller key. The key is
   // obfuscated with the public transfer key (keystream = AES(transfer_key, IV)
   // where IV is the controller node address repeated), then the on-air data is
-  // enc_key(16) || manufacturer(0x02 = Somfy) || key-index(0x01). Only
-  // cmd || enc_key (17 bytes) is authenticated by the MAC; the manufacturer
-  // trailer is not.
+  // enc_key(16) || manufacturer(0x02 = Somfy) || key-index(0x01). No MAC is
+  // sent -- it would authenticate with the per-device secret key, which this
+  // frame is what establishes (confirmed against a real captured 0x30 frame:
+  // exactly enc_key+mfg+key_index+seq+CRC, 31 bytes, no MAC).
   uint8_t key_data[18];
   iohc_proto::obfuscate_key_1w(aes128_ecb_encrypt, iohc_keys::TRANSFER_KEY, this->node_id_,
                                this->encryption_key_, key_data);
   key_data[16] = 0x02;  // manufacturer: Somfy
   key_data[17] = 0x01;  // key index
-  auto frame_key =
-      this->build_1w_frame(iohc_cmd::CMD_WRITE_PRIVATE, key_data, sizeof(key_data), iohc::BROADCAST_ADDR, 16);
+  auto frame_key = this->build_1w_frame(iohc_cmd::CMD_WRITE_PRIVATE, key_data, sizeof(key_data),
+                                        iohc::BROADCAST_ADDR, /*auth_len=*/0, /*include_mac=*/false);
   ESP_LOGD(TAG, "PROG: tx CMD_WRITE_PRIVATE (0x%02X), %u bytes (key omitted)",
            iohc_cmd::CMD_WRITE_PRIVATE, static_cast<unsigned>(frame_key.size()));
   this->hub_->transmit_packet(frame_key, static_cast<uint8_t>(this->repeat_count_));
@@ -246,7 +247,8 @@ void SomfyIohcCover::on_2w_result_(bool success, const IohcDecodedPacket *respon
 }
 
 std::vector<uint8_t> SomfyIohcCover::build_1w_frame(uint8_t cmd, const uint8_t *data,
-                                                      size_t data_len, uint32_t dest_node, size_t auth_len) {
+                                                      size_t data_len, uint32_t dest_node, size_t auth_len,
+                                                      bool include_mac) {
   if (auth_len == SIZE_MAX || auth_len > data_len)
     auth_len = data_len;
 
@@ -284,17 +286,21 @@ std::vector<uint8_t> SomfyIohcCover::build_1w_frame(uint8_t cmd, const uint8_t *
   frame.push_back(static_cast<uint8_t>(sequence & 0xFF));
 
   // MAC (6 bytes) over the authenticated payload cmd || data[0..auth_len).
-  uint8_t mac_payload[1 + 16];
-  size_t mac_payload_len = 1 + auth_len;
-  mac_payload[0] = cmd;
-  memcpy(mac_payload + 1, data, auth_len);
+  // Omitted for frames that establish the per-device secret key itself (e.g.
+  // CMD_WRITE_PRIVATE) -- there is nothing to authenticate with yet.
+  if (include_mac) {
+    uint8_t mac_payload[1 + 16];
+    size_t mac_payload_len = 1 + auth_len;
+    mac_payload[0] = cmd;
+    memcpy(mac_payload + 1, data, auth_len);
 
-  uint8_t iv[16];
-  iohc_proto::build_iv_1w(mac_payload, mac_payload_len, sequence, iv);
-  uint8_t mac[6];
-  iohc_proto::compute_mac(aes128_ecb_encrypt, this->encryption_key_, iv, mac);
-  for (int i = 0; i < 6; i++) {
-    frame.push_back(mac[i]);
+    uint8_t iv[16];
+    iohc_proto::build_iv_1w(mac_payload, mac_payload_len, sequence, iv);
+    uint8_t mac[6];
+    iohc_proto::compute_mac(aes128_ecb_encrypt, this->encryption_key_, iv, mac);
+    for (int i = 0; i < 6; i++) {
+      frame.push_back(mac[i]);
+    }
   }
 
   // CtrlByte0: order=11, isOneWay=1, size = body length (everything after ctrl0,
@@ -302,9 +308,7 @@ std::vector<uint8_t> SomfyIohcCover::build_1w_frame(uint8_t cmd, const uint8_t *
   const size_t size_field = frame.size() - 1;
   if (size_field > 0x1F) {
     // io-homecontrol's 5-bit length field caps a single frame at 31 body bytes
-    // (max ~21 data bytes). Larger frames must be fragmented; a receiver reads
-    // length & 0x1F and parses the wrong length. Pairing's CMD_WRITE_PRIVATE
-    // (0x30) is 34 bytes and trips this — flagging it so it shows in logs.
+    // (max ~21 data bytes); there is no fragmentation for larger frames.
     ESP_LOGW(TAG, "1W frame cmd=0x%02X body=%u B exceeds 31-byte 1W limit; size field wraps to %u",
              cmd, static_cast<unsigned>(size_field), static_cast<unsigned>(size_field & 0x1F));
   }

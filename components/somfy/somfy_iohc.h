@@ -149,11 +149,18 @@ class SomfyIohcCover : public SomfyTimeBasedCover {
   // 1W Protocol (per-device: uses device key + rolling code)
   void send_1w_command(uint16_t main_param);
   // Build a complete 1W frame. The MAC authenticates cmd || data[0..auth_len);
-  // auth_len defaults to the full data length. The 0x30 key-push frame uses a
-  // shorter auth_len because its trailing manufacturer bytes are not
-  // authenticated.
+  // auth_len defaults to the full data length.
+  //
+  // include_mac controls whether the 6-byte MAC is appended at all. It
+  // authenticates with the per-device secret key, which doesn't exist yet
+  // for the CMD_WRITE_PRIVATE (0x30) key-push frame that establishes it --
+  // confirmed against a real captured 0x30 frame, which is exactly
+  // enc_key(16) + mfg(1) + key_index(1) + seq(2) + CRC(2) = 31 bytes, with
+  // no MAC. Every other 1W command (verified against a real 0x39 capture)
+  // does carry the MAC.
   std::vector<uint8_t> build_1w_frame(uint8_t cmd, const uint8_t *data, size_t data_len,
-                                      uint32_t dest_node, size_t auth_len = SIZE_MAX);
+                                      uint32_t dest_node, size_t auth_len = SIZE_MAX,
+                                      bool include_mac = true);
 
   // 2W Protocol (uses challenge/response via hub session)
   void send_2w_command(uint16_t main_param);
