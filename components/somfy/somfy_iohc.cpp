@@ -183,18 +183,24 @@ void SomfyIohcCover::program() {
            iohc_cmd::CMD_WRITE_PRIVATE, static_cast<unsigned>(frame_key.size()));
   this->hub_->transmit_packet(frame_key, static_cast<uint8_t>(this->repeat_count_));
 
-  // Step 3: CMD_PARAM_ITEM (0x20) items 0 and 1 -- the confirmed common prefix
-  // a real remote sends after CMD_WRITE_PRIVATE (see iohc_cmd::CMD_PARAM_ITEM
-  // for how that was established). Format: [0x02, 0x03, type, index, 0x00].
-  for (uint8_t index = 0; index <= 1; index++) {
-    uint8_t type = (index == 0) ? 0x0C : 0x05;
+  // Step 3: CMD_PARAM_ITEM (0x20) items 0, 1, then straight to the 0xFF
+  // terminator. Items 0/1 are the confirmed common prefix a real remote
+  // sends after CMD_WRITE_PRIVATE; the content in between diverged
+  // completely across two real captures, but both always ended on the same
+  // index=0xFF item -- if the motor treats the parameter sync as incomplete
+  // (and discards the whole registration) until it sees that terminator,
+  // sending the middle items shouldn't matter. See iohc_cmd::CMD_PARAM_ITEM.
+  auto send_param_item = [this](uint8_t type, uint8_t index) {
     uint8_t item_data[5] = {0x02, 0x03, type, index, 0x00};
     auto frame_item = this->build_1w_frame(iohc_cmd::CMD_PARAM_ITEM, item_data, sizeof(item_data),
                                            iohc::BROADCAST_ADDR);
     ESP_LOGD(TAG, "PROG: tx CMD_PARAM_ITEM (0x%02X) index=%u, %u bytes",
              iohc_cmd::CMD_PARAM_ITEM, index, static_cast<unsigned>(frame_item.size()));
     this->hub_->transmit_packet(frame_item, static_cast<uint8_t>(this->repeat_count_));
-  }
+  };
+  send_param_item(0x0C, 0x00);
+  send_param_item(0x05, 0x01);
+  send_param_item(0x05, 0xFF);
 
   ESP_LOGI(TAG, "PROG: pairing frames sent");
 }
