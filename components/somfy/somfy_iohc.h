@@ -52,10 +52,13 @@ static constexpr uint8_t ORIGINATOR_RAIN = 0x02;
 static constexpr uint8_t ORIGINATOR_TIMER = 0x03;
 static constexpr uint8_t ORIGINATOR_SECURITY = 0x08;
 
-// ACEI (Access Control & Encryption Info). 0x61 is the value Somfy actuators
-// expect (confirmed against rtl_433 EXECUTE captures: Originator 0x01, ACEI 0x61).
-static constexpr uint8_t ACEI_DEFAULT = 0x61;   // 1W
-static constexpr uint8_t ACEI_2W = 0x61;        // 2W
+// ACEI (Access Control & Encryption Info). 0x43 confirmed live against a real
+// CMD_EXECUTE (OPEN) frame from an already-paired physical remote controlling
+// the same actuator: Originator 0x01, ACEI 0x43, MainParam/FP1/FP2 all
+// matching this project's own encoding exactly. Supersedes an earlier 0x61
+// guess (attributed to rtl_433 captures) that didn't match on this hardware.
+static constexpr uint8_t ACEI_DEFAULT = 0x43;   // 1W
+static constexpr uint8_t ACEI_2W = 0x61;        // 2W -- not yet verified live
 
 static constexpr uint8_t TX_REPEAT_COUNT = 4;
 }  // namespace iohc_cmd
