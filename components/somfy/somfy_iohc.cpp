@@ -182,6 +182,20 @@ void SomfyIohcCover::program() {
   ESP_LOGD(TAG, "PROG: tx CMD_WRITE_PRIVATE (0x%02X), %u bytes (key omitted)",
            iohc_cmd::CMD_WRITE_PRIVATE, static_cast<unsigned>(frame_key.size()));
   this->hub_->transmit_packet(frame_key, static_cast<uint8_t>(this->repeat_count_));
+
+  // Step 3: CMD_PARAM_ITEM (0x20) items 0 and 1 -- the confirmed common prefix
+  // a real remote sends after CMD_WRITE_PRIVATE (see iohc_cmd::CMD_PARAM_ITEM
+  // for how that was established). Format: [0x02, 0x03, type, index, 0x00].
+  for (uint8_t index = 0; index <= 1; index++) {
+    uint8_t type = (index == 0) ? 0x0C : 0x05;
+    uint8_t item_data[5] = {0x02, 0x03, type, index, 0x00};
+    auto frame_item = this->build_1w_frame(iohc_cmd::CMD_PARAM_ITEM, item_data, sizeof(item_data),
+                                           iohc::BROADCAST_ADDR);
+    ESP_LOGD(TAG, "PROG: tx CMD_PARAM_ITEM (0x%02X) index=%u, %u bytes",
+             iohc_cmd::CMD_PARAM_ITEM, index, static_cast<unsigned>(frame_item.size()));
+    this->hub_->transmit_packet(frame_item, static_cast<uint8_t>(this->repeat_count_));
+  }
+
   ESP_LOGI(TAG, "PROG: pairing frames sent");
 }
 
