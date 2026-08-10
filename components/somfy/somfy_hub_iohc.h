@@ -124,6 +124,14 @@ class SomfyIohcHub : public Component,
   void loop() override;
   void dump_config() override;
 
+  // Must run after the radio backend's own setup(): sx126x defers its
+  // rx/sleep decision to the end of its setup(), so calling begin_rx() any
+  // earlier gets silently undone once sx126x finishes configuring (e.g. with
+  // `rx_start: false`, it ends in set_mode_sleep()). sx126x sets its own
+  // priority to PROCESSOR; cc1101 doesn't override (defaults to DATA), so
+  // PROCESSOR is safely after both regardless of YAML declaration order.
+  float get_setup_priority() const override { return setup_priority::PROCESSOR - 1.0f; }
+
   // Configuration
   void set_radio(IohcRadio *radio) { this->radio_ = radio; }
 
