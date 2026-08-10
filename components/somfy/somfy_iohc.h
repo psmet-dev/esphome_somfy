@@ -39,20 +39,6 @@ namespace iohc_cmd {
 static constexpr uint8_t CMD_EXECUTE = 0x00;
 static constexpr uint8_t CMD_WRITE_PRIVATE = 0x30;
 static constexpr uint8_t CMD_REMOVE_CONTROLLER = 0x39;
-// CMD_PARAM_ITEM (0x20): a post-pairing parameter/capability announcement a
-// real remote sends several times after CMD_WRITE_PRIVATE, each one tagged
-// [0x02, 0x03, type, index, 0x00]. Captured live from an already-paired
-// remote re-adding itself: item 0 (type=0x0C, index=0x00) and item 1
-// (type=0x05, index=0x01) were byte-identical across two separate pairing
-// captures; everything the same remote sent after item 1 differed between
-// the two captures (a divergent run of more 0x20 items + a 0x2E vs. a run of
-// larger 0x62 frames, both landing on the same 0x20 index=0xFF terminator) --
-// likely dependent on a motor ack we can't see (every packet captured had
-// src=the remote, never the motor; a reply on a different io-homecontrol
-// frequency we're not tuned to would explain that). So only items 0 and 1
-// are sent here as the confirmed common prefix; the terminator and whatever
-// determines the divergent tail are not yet understood.
-static constexpr uint8_t CMD_PARAM_ITEM = 0x20;
 
 // Main Parameters for CMD_EXECUTE
 static constexpr uint16_t MP_OPEN = 0x0000;
