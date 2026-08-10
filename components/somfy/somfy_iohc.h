@@ -39,6 +39,13 @@ namespace iohc_cmd {
 static constexpr uint8_t CMD_EXECUTE = 0x00;
 static constexpr uint8_t CMD_WRITE_PRIVATE = 0x30;
 static constexpr uint8_t CMD_REMOVE_CONTROLLER = 0x39;
+// CMD_ADDRESS_REQUEST (0x36): broadcast discovery request, no parameter, no
+// authentication -- any receiving device answers with CMD_ADDRESS_ANSWER
+// (0x37, its own 3-byte node address). Used here only as a diagnostic probe:
+// we've never once seen the motor itself transmit anything (every capture's
+// src was either the remote or an unrelated device), so this checks whether
+// it replies to anything at all on the frequency we're already listening on.
+static constexpr uint8_t CMD_ADDRESS_REQUEST = 0x36;
 
 // Main Parameters for CMD_EXECUTE
 static constexpr uint16_t MP_OPEN = 0x0000;
@@ -100,6 +107,11 @@ class SomfyIohcCover : public SomfyTimeBasedCover {
   void set_encryption_key(const char *hex_key);
   void set_mode(IohcMode mode) { this->mode_ = mode; }
   void set_target_node(uint32_t node) { this->target_node_ = node & 0x00FFFFFF; }
+
+  // Diagnostic: broadcast CMD_ADDRESS_REQUEST (0x36) and see if anything
+  // replies with CMD_ADDRESS_ANSWER (0x37) -- see iohc_cmd::CMD_ADDRESS_REQUEST.
+  // Not part of the normal cover API; call from a YAML lambda for testing.
+  void send_address_request();
 
 #ifdef USE_SOMFY_IOHC_RX
   // RX state-sync configuration (mirrors the RTS allowed_remotes/detected_remote

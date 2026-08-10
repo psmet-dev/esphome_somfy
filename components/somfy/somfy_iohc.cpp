@@ -185,6 +185,15 @@ void SomfyIohcCover::program() {
   ESP_LOGI(TAG, "PROG: pairing frames sent");
 }
 
+void SomfyIohcCover::send_address_request() {
+  // No parameter, no authentication -- see iohc_cmd::CMD_ADDRESS_REQUEST.
+  auto frame = this->build_1w_frame(iohc_cmd::CMD_ADDRESS_REQUEST, nullptr, 0, iohc::BROADCAST_ADDR,
+                                    /*auth_len=*/0, /*include_mac=*/false);
+  ESP_LOGI(TAG, "ADDRESS_REQUEST (0x%02X): broadcasting, %u bytes -- watch the log for a CMD_ADDRESS_ANSWER (0x37) reply",
+           iohc_cmd::CMD_ADDRESS_REQUEST, static_cast<unsigned>(frame.size()));
+  this->hub_->transmit_packet(frame, static_cast<uint8_t>(this->repeat_count_));
+}
+
 // ---------------------------------------------------------------------------
 // 1W Protocol (per-device: uses device key + rolling code)
 // ---------------------------------------------------------------------------
