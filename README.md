@@ -215,6 +215,8 @@ sx126x:
   rst_pin: GPIO12
   rf_switch: true
   hw_version: sx1262
+  tcxo_voltage: 1_8V  # this board's SX1262 uses a TCXO, not a plain crystal
+  tcxo_delay: 5ms
   modulation: FSK
   frequency: 868950000
   bitrate: 38400
